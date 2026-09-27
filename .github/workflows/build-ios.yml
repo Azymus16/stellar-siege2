@@ -1,14 +1,11 @@
 name: Build iOS (non signé)
 
-# Se lance uniquement à la demande, depuis l'onglet "Actions" du repo GitHub
-# (bouton "Run workflow"). Ne consomme donc des minutes macOS que quand on
-# en a réellement besoin.
 on:
   workflow_dispatch:
 
 env:
   GODOT_VERSION: "4.3-stable"
-  GODOT_VERSION_DIR: "4.3.stable" # même version, mais Godot utilise un point au lieu d'un tiret
+  GODOT_VERSION_DIR: "4.3.stable"
 
 jobs:
   build-ios:
@@ -19,6 +16,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Télécharger Godot (édition macOS)
+        timeout-minutes: 5
         run: |
           curl -L -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_macos.universal.zip"
           unzip -q godot.zip
@@ -27,25 +25,32 @@ jobs:
           echo "GODOT_BIN=/Applications/Godot.app/Contents/MacOS/Godot" >> $GITHUB_ENV
 
       - name: Télécharger les modules d'export (export templates)
+        timeout-minutes: 5
         run: |
           curl -L -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_export_templates.tpz"
           mkdir -p "$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION_DIR}"
           unzip -q templates.tpz -d /tmp/godot_templates
           cp -r /tmp/godot_templates/templates/* "$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION_DIR}/"
 
-      - name: Générer un preset d'export par défaut
+      - name: Importer le projet une première fois (construit le cache des classes et des textures)
+        timeout-minutes: 5
         run: |
-          "$GODOT_BIN" --headless --path . --generate-export-presets || true
-          test -f export_presets.cfg || (echo "export_presets.cfg n'a pas été généré" && exit 1)
-          cat export_presets.cfg
+          "$GODOT_BIN" --headless --editor --quit-after 20 --path . || true
+          echo "--- Vérification du cache d'import ---"
+          ls -la .godot || echo "Pas de dossier .godot généré !"
 
-      - name: Configurer le preset iOS (identifiant, chemin de sortie)
-        run: python3 tools/patch_export_presets.py
+      - name: Vérifier que le preset iOS existe
+        run: |
+          test -f export_presets.cfg || (echo "export_presets.cfg est absent à la racine du repo !" && exit 1)
+          grep -q 'platform="iOS"' export_presets.cfg || (echo "Aucun preset iOS trouvé dans export_presets.cfg" && exit 1)
+          echo "OK, preset iOS trouvé."
 
       - name: Exporter le projet Xcode depuis Godot
+        timeout-minutes: 10
         run: |
           mkdir -p build/ios
           "$GODOT_BIN" --headless --path . --export-release "iOS" build/ios/StellarSiege.xcodeproj
+          echo "--- Contenu de build/ios ---"
           ls -la build/ios
 
       - name: Détecter le scheme Xcode généré
@@ -60,6 +65,7 @@ jobs:
           echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
 
       - name: Compiler un .app non signé (signature désactivée, Sideloadly s'en chargera)
+        timeout-minutes: 15
         run: |
           cd build/ios
           xcodebuild \
